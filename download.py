@@ -11,8 +11,8 @@ Tile = namedtuple("Tile", ["z", "x", "y"])
 
 
 outfilename = "../data/elevation.mbtiles"
-mode = "r+"  # "w"
-zoom = [0, 4]
+mode = "w"  # "w"
+zoom = [0, 2]
 skip_existing = True
 
 tiles = []
@@ -54,7 +54,10 @@ with MBtiles(outfilename, mode) as out:
             data = session.get(url).content
 
             if data:
-                out.write_tile(*tile, data)
+                # Note: invert the Y value since AWS uses a different
+                # tiling scheme
+                y = (1 << tile.z) - 1 - tile.y
+                out.write_tile(z=tile.z, x=tile.x, y=y, data=data)
 
         else:
             print("empty tile: {}".format(tile))
