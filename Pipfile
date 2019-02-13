@@ -1,15 +1,24 @@
 [[source]]
+
 url = "https://pypi.org/simple"
 verify_ssl = true
 name = "pypi"
 
+
 [packages]
+
 requests = "*"
-pymbtiles = {git = "https://github.com/consbio/pymbtiles.git"}
+aiohttp = "*"
+pymbtiles = "==0.3.1"
+tqdm = "*"
+
 
 [dev-packages]
+
 black = "*"
 pylint = "*"
 
+
 [requires]
+
 python_version = "3.6"
