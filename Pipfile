@@ -11,11 +11,11 @@ requests = "*"
 aiohttp = "*"
 pymbtiles = "==0.3.1"
 tqdm = "*"
+numpy = "*"
 
 
 [dev-packages]
 
-black = "*"
 pylint = "*"
 
 

@@ -1,80 +1,79 @@
 import asyncio
-from collections import namedtuple
 
 from tqdm import tqdm
 from aiohttp import ClientSession, TCPConnector
+import numpy as np
 
+from pymbtiles import MBtiles, Tile
 
-from pymbtiles import MBtiles
-
-
+CONCURRENCY = 30
+BATCH_SIZE = 100  # number of tiles per batch
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 EMPTY_TILE = 757  # if content-length is this value, tile is empty and not useful
 
-Tile = namedtuple("Tile", ["z", "x", "y"])
-
-
-def flip_y(tile):
-    """ Invert tile Y coordinate to match xyz tiling scheme """
-    return Tile(tile.z, tile.x, (1 << tile.z) - 1 - tile.y)
-
-
-@asyncio.coroutine
-def wait_with_progress(futures):
-    for f in tqdm(asyncio.as_completed(futures), total=len(futures)):
-        yield from f
+loop = asyncio.get_event_loop()
 
 
 def download(mbtiles, url, min_zoom, max_zoom, skip_existing=True, concurrency=10):
-    async def fetch_tile(session, url, tile):
-        tile_url = url.format(z=tile.z, x=tile.x, y=tile.y)
+    async def fetch_tile(session, url, z, x, y):
+        tile_url = url.format(z=z, x=x, y=y)
 
-        async with session.head(tile_url, ssl=False) as head:
+        async with session.head(tile_url) as head:
             length = int(head.headers.get("Content-Length"))
 
             if length != EMPTY_TILE:
-
-                async with session.get(tile_url, ssl=False) as r:
-                    data = await r.read()
-                    # return flip_y(tile), data
-                    mbtiles.write_tile(*flip_y(tile), data=data)
+                async with session.get(tile_url) as r:
+                    flipped_y = (1 << z) - 1 - y
+                    return Tile(z, x, flipped_y, await r.read())
 
             else:
-                print("empty tile: {}".format(tile))
+                print("empty tile: {} {} {}".format(z, x, y))
+                return None
 
-    async def fetch_tiles():
-        async with ClientSession(connector=TCPConnector(limit=concurrency)) as session:
-            futures = []
+    async def fetch_tiles(tiles):
+        async with ClientSession(
+            connector=TCPConnector(limit=concurrency, verify_ssl=False)
+        ) as session:
+            futures = [
+                asyncio.ensure_future(fetch_tile(session, url, *tile)) for tile in tiles
+            ]
+            for task in tqdm(asyncio.as_completed(futures), total=len(futures)):
+                await task
 
-            for z in range(min_zoom, max_zoom + 1):
-                for x in range(0, 2 ** z):
-                    for y in range(0, 2 ** z):
-                        if skip_existing and mbtiles.has_tile(z, x, y):
-                            continue
+            results = [f.result() for f in futures if f.result() is not None]
+            mbtiles.write_tiles(results)
 
-                        else:
-                            futures.append(
-                                asyncio.ensure_future(
-                                    fetch_tile(session, url, Tile(z, x, y))
-                                )
-                            )
+    for zoom in range(min_zoom, max_zoom + 1):
+        print("zoom {}".format(zoom))
 
-            if len(futures):
-                print("Getting ready to download {} tiles".format(len(futures)))
+        xy = np.array(
+            np.meshgrid(np.arange(0, 2 ** zoom), np.arange(0, 2 ** zoom))
+        ).T.reshape(-1, 2)
 
-                for f in tqdm(asyncio.as_completed(futures), total=len(futures)):
-                    await f
+        tiles = []
 
+        # filter tiles based on ones we already have
+        for x, y in xy:
+            if skip_existing and mbtiles.has_tile(zoom, x, y):
+                # print("has {} {} {}".format(zoom, x, y))
+                continue
             else:
-                print("No tiles to download")
+                # print("get {} {} {}".format(zoom, x, y))
+                tiles.append((zoom, x, y))
 
-    asyncio.get_event_loop().run_until_complete(fetch_tiles())
+        if tiles:
+            print("zoom {} has {} tiles to fetch".format(zoom, len(tiles)))
+            for i in range(0, len(tiles), BATCH_SIZE):
+                loop.run_until_complete(fetch_tiles(tiles[i : i + BATCH_SIZE]))
+
+        else:
+            print("no tiles to fetch")
 
 
 min_zoom = 0
-max_zoom = 5
+max_zoom = 4
 
-with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:
+with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:  # FIXME: w => r+
     mbtiles.meta = {
         "name": "elevation",
         "description": "Mapzen Terrarium Elevation Tiles",
@@ -89,4 +88,4 @@ with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:
         "maxzoom": str(max_zoom),
     }
 
-    download(mbtiles, TILE_URL, min_zoom, max_zoom, True)
+    download(mbtiles, TILE_URL, min_zoom, max_zoom, concurrency=CONCURRENCY)
