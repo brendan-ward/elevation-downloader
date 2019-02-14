@@ -1,20 +1,24 @@
 import asyncio
 
 from tqdm import tqdm
-from aiohttp import ClientSession, TCPConnector
+from aiohttp import ClientSession, TCPConnector, ClientTimeout
 import numpy as np
+from mercantile import tiles as get_tiles
 
 from pymbtiles import MBtiles, Tile
 
 CONCURRENCY = 30
-BATCH_SIZE = 100  # number of tiles per batch
+BATCH_SIZE = 1000  # number of tiles per batch
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 EMPTY_TILE = 757  # if content-length is this value, tile is empty and not useful
+
 
 loop = asyncio.get_event_loop()
 
 
-def download(mbtiles, url, min_zoom, max_zoom, skip_existing=True, concurrency=10):
+def download(
+    mbtiles, url, min_zoom, max_zoom, bounds=None, skip_existing=True, concurrency=10
+):
     async def fetch_tile(session, url, z, x, y):
         tile_url = url.format(z=z, x=x, y=y)
 
@@ -32,7 +36,8 @@ def download(mbtiles, url, min_zoom, max_zoom, skip_existing=True, concurrency=1
 
     async def fetch_tiles(tiles):
         async with ClientSession(
-            connector=TCPConnector(limit=concurrency, verify_ssl=False)
+            timeout=ClientTimeout(total=60),
+            connector=TCPConnector(limit=concurrency, verify_ssl=False),
         ) as session:
             futures = [
                 asyncio.ensure_future(fetch_tile(session, url, *tile)) for tile in tiles
@@ -46,20 +51,26 @@ def download(mbtiles, url, min_zoom, max_zoom, skip_existing=True, concurrency=1
     for zoom in range(min_zoom, max_zoom + 1):
         print("zoom {}".format(zoom))
 
-        xy = np.array(
-            np.meshgrid(np.arange(0, 2 ** zoom), np.arange(0, 2 ** zoom))
-        ).T.reshape(-1, 2)
-
         tiles = []
 
-        # filter tiles based on ones we already have
-        for x, y in xy:
-            if skip_existing and mbtiles.has_tile(zoom, x, y):
-                # print("has {} {} {}".format(zoom, x, y))
-                continue
-            else:
-                # print("get {} {} {}".format(zoom, x, y))
-                tiles.append((zoom, x, y))
+        if bounds is None:
+            xy = np.array(
+                np.meshgrid(np.arange(0, 2 ** zoom), np.arange(0, 2 ** zoom))
+            ).T.reshape(-1, 2)
+
+            # filter tiles based on ones we already have
+            tiles = [
+                (zoom, x, y)
+                for x, y in xy
+                if not (skip_existing and mbtiles.has_tile(zoom, x, y))
+            ]
+        else:
+            bounded_tiles = get_tiles(*bounds, zooms=[zoom, zoom])
+            tiles = [
+                (z, x, y)
+                for x, y, z in bounded_tiles
+                if not (skip_existing and mbtiles.has_tile(z, x, y))
+            ]
 
         if tiles:
             print("zoom {} has {} tiles to fetch".format(zoom, len(tiles)))
@@ -70,10 +81,13 @@ def download(mbtiles, url, min_zoom, max_zoom, skip_existing=True, concurrency=1
             print("no tiles to fetch")
 
 
-min_zoom = 0
-max_zoom = 4
+min_zoom = 6
+max_zoom = 6
 
-with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:  # FIXME: w => r+
+# Approx bounds of South America
+bounds = [-95.273438, -57.326521, -32.695313, 13.239945]
+
+with MBtiles("../data/elevation.mbtiles", "w") as mbtiles:  # FIXME: w => r+
     mbtiles.meta = {
         "name": "elevation",
         "description": "Mapzen Terrarium Elevation Tiles",
@@ -88,4 +102,6 @@ with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:  # FIXME: w => r+
         "maxzoom": str(max_zoom),
     }
 
-    download(mbtiles, TILE_URL, min_zoom, max_zoom, concurrency=CONCURRENCY)
+    download(
+        mbtiles, TILE_URL, min_zoom, max_zoom, bounds=bounds, concurrency=CONCURRENCY
+    )

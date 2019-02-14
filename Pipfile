@@ -12,6 +12,7 @@ aiohttp = "*"
 pymbtiles = "==0.3.1"
 tqdm = "*"
 numpy = "*"
+mercantile = "*"
 
 
 [dev-packages]
