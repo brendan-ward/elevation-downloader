@@ -11,9 +11,21 @@ CONCURRENCY = 30
 BATCH_SIZE = 1000  # number of tiles per batch
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 EMPTY_TILE = 757  # if content-length is this value, tile is empty and not useful
-
+WORLD_BOUNDS = [-180, -85, 180, 85]
 
 loop = asyncio.get_event_loop()
+
+
+def get_center(bounds, min_zoom=0):
+    return [
+        min_zoom,
+        ((bounds[2] - bounds[0]) / 2) + bounds[0],
+        ((bounds[3] - bounds[1]) / 2) + bounds[1],
+    ]
+
+
+def flip_y(y, z):
+    return (1 << z) - 1 - y
 
 
 def download(
@@ -27,8 +39,7 @@ def download(
 
             if length != EMPTY_TILE:
                 async with session.get(tile_url) as r:
-                    flipped_y = (1 << z) - 1 - y
-                    return Tile(z, x, flipped_y, await r.read())
+                    return Tile(z, x, flip_y(y), await r.read())
 
             else:
                 print("empty tile: {} {} {}".format(z, x, y))
@@ -46,6 +57,7 @@ def download(
                 await task
 
             results = [f.result() for f in futures if f.result() is not None]
+            print([(z, x, y) for z, x, y, _ in results])
             mbtiles.write_tiles(results)
 
     for zoom in range(min_zoom, max_zoom + 1):
@@ -62,15 +74,17 @@ def download(
             tiles = [
                 (zoom, x, y)
                 for x, y in xy
-                if not (skip_existing and mbtiles.has_tile(zoom, x, y))
+                if not (skip_existing and mbtiles.has_tile(zoom, x, flip_y(y, zoom)))
             ]
+
         else:
             bounded_tiles = get_tiles(*bounds, zooms=[zoom, zoom])
             tiles = [
                 (z, x, y)
                 for x, y, z in bounded_tiles
-                if not (skip_existing and mbtiles.has_tile(z, x, y))
+                if not (skip_existing and mbtiles.has_tile(z, x, flip_y(y, z)))
             ]
+            print(tiles)
 
         if tiles:
             print("zoom {} has {} tiles to fetch".format(zoom, len(tiles)))
@@ -81,13 +95,13 @@ def download(
             print("no tiles to fetch")
 
 
-min_zoom = 6
-max_zoom = 6
+min_zoom = 3
+max_zoom = 5
 
 # Approx bounds of South America
 bounds = [-95.273438, -57.326521, -32.695313, 13.239945]
 
-with MBtiles("../data/elevation.mbtiles", "w") as mbtiles:  # FIXME: w => r+
+with MBtiles("../data/elevation.mbtiles", "r+") as mbtiles:  # FIXME: w => r+
     mbtiles.meta = {
         "name": "elevation",
         "description": "Mapzen Terrarium Elevation Tiles",
@@ -96,8 +110,8 @@ with MBtiles("../data/elevation.mbtiles", "w") as mbtiles:  # FIXME: w => r+
         "credits": "Mapzen",
         "type": "overlay",
         "format": "png",
-        "bounds": ",".join(str(x) for x in [-180, -85, 180, 85]),
-        "center": ",".join(str(x) for x in [0, 0, 0]),
+        "bounds": ",".join(str(x) for x in bounds or WORLD_BOUNDS),
+        "center": ",".join(str(x) for x in get_center(bounds or WORLD_BOUNDS)),
         "minzoom": str(min_zoom),
         "maxzoom": str(max_zoom),
     }
