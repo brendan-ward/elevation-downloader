@@ -7,7 +7,7 @@ from mercantile import tiles as get_tiles
 
 from pymbtiles import MBtiles, Tile
 
-CONCURRENCY = 30
+CONCURRENCY = 10
 BATCH_SIZE = 1000  # number of tiles per batch
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 EMPTY_TILE = 757  # if content-length is this value, tile is empty and not useful
@@ -35,14 +35,17 @@ def download(
         tile_url = url.format(z=z, x=x, y=y)
 
         async with session.head(tile_url) as head:
-            length = int(head.headers.get("Content-Length"))
+            try:
+                length = int(head.headers.get("Content-Length"))
+            except:
+                length = EMPTY_TILE
 
             if length != EMPTY_TILE:
                 async with session.get(tile_url) as r:
-                    return Tile(z, x, flip_y(y), await r.read())
+                    return Tile(z, x, flip_y(y, z), await r.read())
 
             else:
-                print("empty tile: {} {} {}".format(z, x, y))
+                # print("empty tile: {} {} {}".format(z, x, y))
                 return None
 
     async def fetch_tiles(tiles):
@@ -57,7 +60,6 @@ def download(
                 await task
 
             results = [f.result() for f in futures if f.result() is not None]
-            print([(z, x, y) for z, x, y, _ in results])
             mbtiles.write_tiles(results)
 
     for zoom in range(min_zoom, max_zoom + 1):
@@ -84,7 +86,6 @@ def download(
                 for x, y, z in bounded_tiles
                 if not (skip_existing and mbtiles.has_tile(z, x, flip_y(y, z)))
             ]
-            print(tiles)
 
         if tiles:
             print("zoom {} has {} tiles to fetch".format(zoom, len(tiles)))
@@ -95,8 +96,8 @@ def download(
             print("no tiles to fetch")
 
 
-min_zoom = 3
-max_zoom = 5
+min_zoom = 0
+max_zoom = 8
 
 # Approx bounds of South America
 bounds = [-95.273438, -57.326521, -32.695313, 13.239945]
