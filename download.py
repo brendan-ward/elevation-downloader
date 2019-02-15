@@ -83,7 +83,7 @@ def download(mbtiles, url, min_zoom, max_zoom, bounds=None, concurrency=10):
                 np.meshgrid(np.arange(0, 2 ** zoom), np.arange(0, 2 ** zoom))
             ).T.reshape(-1, 2)
 
-            tiles = [(zoom, x, y) for x, y in xy]
+            tiles = [(zoom, int(x), int(y)) for x, y in xy]
 
         else:
             bounded_tiles = get_tiles(*bounds, zooms=zoom)
