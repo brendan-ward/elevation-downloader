@@ -2,6 +2,7 @@ import os
 import glob
 import asyncio
 import pickle
+from time import time
 
 from tqdm import tqdm
 from aiohttp import ClientSession, TCPConnector, ClientTimeout
@@ -111,12 +112,14 @@ def download(mbtiles, url, min_zoom, max_zoom, bounds=None, concurrency=10):
             print("no tiles to fetch")
 
 
-min_zoom = 5
-max_zoom = 5
+min_zoom = 0
+max_zoom = 0
 mode = "r+"
 
 # Approx bounds of South America
 bounds = [-95.273438, -57.326521, -32.695313, 13.239945]
+
+start = time()
 
 # clear out any progress files
 if mode == "w":
@@ -124,7 +127,7 @@ if mode == "w":
         os.remove(filename)
 
 
-with MBtiles("../data/elevation.mbtiles", mode) as mbtiles:  # FIXME: w => r+
+with MBtiles("../data/elevation2.mbtiles", mode) as mbtiles:  # FIXME: w => r+
     mbtiles.meta = {
         "name": "elevation",
         "description": "Mapzen Terrarium Elevation Tiles",
@@ -142,3 +145,9 @@ with MBtiles("../data/elevation.mbtiles", mode) as mbtiles:  # FIXME: w => r+
     download(
         mbtiles, TILE_URL, min_zoom, max_zoom, bounds=bounds, concurrency=CONCURRENCY
     )
+
+
+print("Done downloading all tiles in {:,.2f} seconds".format(time() - start))
+
+for filename in glob.glob("progress-*.pickle"):
+    os.remove(filename)
